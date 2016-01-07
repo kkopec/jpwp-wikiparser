@@ -20,6 +20,9 @@ DB  = 'mo11939_jpwp'
 DBU = 'mo11939_jpwp'
 DBP = 'TI3jpwp'
 
+ADDRESS = 'localhost'
+PORT = '9901'
+
 
 class RequestParser:
     def __init__(self, request):
@@ -28,15 +31,13 @@ class RequestParser:
         self.meth_list = []
         self.args_list = []
 
-        request['content'] = re.sub(r'\)(?=[^;])', r');', request['content']) # adding delimeter
-
         for command in request['content'].split(';'):
             parts = command.split('(')
 
             if len(parts) == 1:
                 parts.append(None)
             else:
-                parts[1] = parts[1][:-1]
+                parts[1] = parts[1][:-1] # getting rid of closing bracket
 
             self.meth_list.append(parts[0])
             self.args_list.append(parts[1])
@@ -58,7 +59,7 @@ class RequestParser:
         flag = flag[2:]
 
         content = soup.find('div', {'id': 'mw-content-text'})
-        [c.extract() for c in content.find_all(attrs={'class': ['hatnote', 'metadata', 'toc', 'infobox', 'thumb', 'reflist', 'external', 'noprint', 'navbox']})]
+        [c.extract() for c in content.find_all(attrs={'class': ['hatnote', 'metadata', 'toc', 'infobox', 'thumb', 'reference', 'reflist', 'external', 'noprint', 'navbox']})]
         [c.extract() for c in content.find_all(attrs={'id': ['coordinates']})]
 
         text = ''.join([x.string for x in content.findAll(text=True)])
@@ -72,7 +73,7 @@ class RequestParser:
         self.data, self.flag = self.get_content(page)
 
     def tag(self, tag):
-        self.data = re.findall(r'[:upper:][^.?!]*{0}[^.?!]*[.?!]'.format(tag), self.data)
+        self.data = re.findall(r'[^.?!]*{0}[^.?!]*[.?!]'.format(tag), self.data)
 
     def getFlag(self):
         self.data = self.flag
@@ -84,36 +85,52 @@ class RequestParser:
 class RequestHandler(tornado.web.RequestHandler):
     def get(self):
         headers = {'content-type': 'application/json'}
-        data = {
-            'address': 'localhost',
-            'port': '9901',
-            'type': 'text',
-            'content': 'country(Poland)getFlag'
-        }
-        r = requests.post('http://localhost:9901', params=data, headers=headers)
+        data = dict(address=ADDRESS, port=PORT, type='text', content='country(Poland)getFlag')
+        r = requests.post('http://{0}:{1}'.format(ADDRESS, PORT), params=data, headers=headers)
         print r.status_code
 
         self.write('ok')
 
     def post(self):
-        data = {
-            'address': self.get_argument("address", default="localhost", strip=True),
-            'port':    self.get_argument("port", default="9901", strip=True),
+        def fix_content():
+            request['content'] = re.sub(r'\)(?=[^;])', r');', request['content']) # adding delimeter
+
+        request = {
+            'address': self.get_argument("address", default=ADDRESS, strip=True),
+            'port':    self.get_argument("port", default=PORT, strip=True),
             'type':    self.get_argument("type", None, True),
             'content': self.get_argument("content", None, True)
         }
+        fix_content()
 
         conn = pymongo.MongoClient(DB_ADDRESS)
         conn[DB].authenticate(DBU, DBP)
         db = conn[DB]
 
-        dbf_result = db.requests.find_one(data)
-        if not dbf_result:
-            result = RequestParser(data)
-            print result.data
-            dbi_result = db.requests.insert_one(data).inserted_id
+        db_result_req = db.requests.find_one(request)
+        if not db_result_req:
+            data = {
+                'content': request['content'],
+                'type':    request['type']
+            }
+            db_result_data = db.data.find_one(data)
+            if not db_result_data:
+                result = RequestParser(request)
+                data['data'] = result.data
+                db_result_in = db.data.insert_one(data).inserted_id
+                request['data_id'] = db_result_in
+                print '[NEW DATA]'
+                print result.data
+            else:
+                request['data_id'] = db_result_data['_id']
+                print '[DATA DB]'
+                print db_result_data['data']
+
+            db.requests.insert_one(request)
         else:
-            print 'find in db'
+            db_result_data = db.data.find_one({'_id': db_result_req['data_id']})
+            print '[REQ DB]'
+            print db_result_data['data']
 
 
 if __name__ == "__main__":
@@ -123,39 +140,6 @@ if __name__ == "__main__":
     ])
 
     server = tornado.httpserver.HTTPServer(application)
-    server.bind(9901)
+    server.bind(PORT)
     server.start(0)  # Forks multiple sub-processes
     tornado.ioloop.IOLoop.current().start()
-
-    # http_server = tornado.httpserver.HTTPServer(application)
-    # http_server.listen(options.port)
-    # tornado.ioloop.IOLoop.current().start()
-
-
-
-# def parse_request(request):
-#     request['content'] = re.sub(r'\)(?=[^;])', r');', request['content']) # adding delimeter
-#
-#     methods = []
-#     commands = request['content'].split(';')
-#
-#     for command in commands:
-#         parts = command.split('(')
-#
-#         if len(parts) == 1:
-#             parts.append(None)
-#         else:
-#             parts[1] = parts[1][:-1]
-#
-#         methods.append({'name':parts[0],'arguments':parts[1]})
-#
-#     methods = sorted(methods, key=lambda k: k['name']) # sorting
-#
-#     possibles = globals().copy()
-#     possibles.update(locals())
-#     for m in methods:
-#         method = possibles.get(m['name'])
-#         if not method:
-#             raise Exception("Method %s not implemented" % m['name'])
-#         method(m['arguments'])
-#     return 0
