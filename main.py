@@ -1,12 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+from bs4 import BeautifulSoup
 import json
+import pymongo
 import re
 import requests
-import pymongo
-from bs4 import BeautifulSoup
-
-import sys
 
 import tornado.httpserver
 import tornado.ioloop
@@ -16,21 +14,23 @@ import tornado.web
 WIKI_URL = 'http://en.wikipedia.org/wiki/'
 
 DB_ADDRESS = 'mongodb://mongo0.mydevil.net:27017'
-DB  = 'mo11939_jpwp'
-DBU = 'mo11939_jpwp'
-DBP = 'TI3jpwp'
+DB_NAME    = 'mo11939_jpwp'
+DB_USER    = 'mo11939_jpwp'
+DB_PASS    = 'TI3jpwp'
 
-ADDRESS = 'localhost'
-PORT = '9901'
+SERVER_ADDRESS = 'localhost'
+SERVER_PORT    = '9901'
 
 
 class RequestParser:
     def __init__(self, request):
         self.data = None
         self.flag = None
+        self.status = 200
         self.meth_list = []
         self.args_list = []
 
+        # parsing request content
         for command in request['content'].split(';'):
             parts = command.split('(')
 
@@ -42,21 +42,33 @@ class RequestParser:
             self.meth_list.append(parts[0])
             self.args_list.append(parts[1])
 
-        print >> sys.stderr, self.meth_list
-        print >> sys.stderr, self.args_list
-
+        # invoking methods
         for m, a in zip(self.meth_list, self.args_list):
-            method = getattr(self, m)
-            if not method:
-                continue
+            if self.status != 200:
+                return
+
+            try:
+                method = getattr(self, m)
+            except AttributeError:
+                self.status = 400
+                return
             method(a) if a is not None else method()
 
-    @staticmethod
-    def get_content(page):
+        self.status = 200 if self.data is not None else 404
+
+    def get_content(self, name):
+        page = requests.get(WIKI_URL+name)
+        if page.status_code == 404:
+            self.status = 404
+            return None, None
+
         soup = BeautifulSoup(page.content, 'html.parser')
 
-        flag = [f.find('img') for f in soup.find_all('a', title=re.compile(r'Flag of.*')) if f.find('img') is not None][0]['src']
-        flag = flag[2:]
+        try:
+            flag = [f.find('img') for f in soup.find_all('a', title=re.compile(r'Flag of.*')) if f.find('img') is not None][0]['src']
+            flag = flag[2:]
+        except IndexError:
+            flag = None
 
         content = soup.find('div', {'id': 'mw-content-text'})
         [c.extract() for c in content.find_all(attrs={'class': ['hatnote', 'metadata', 'toc', 'infobox', 'thumb', 'reference', 'reflist', 'external', 'noprint', 'navbox']})]
@@ -66,14 +78,19 @@ class RequestParser:
         text = text[:text.find('References')]
         text = re.sub(r'[\n]{3,}','\n\n', text).strip()
 
+        self.status = 200
         return text, flag
 
     def country(self, name):
-        page = requests.get(WIKI_URL+name)
-        self.data, self.flag = self.get_content(page)
+        self.data, self.flag = self.get_content(name)
 
     def tag(self, tag):
-        self.data = re.findall(r'[^.?!]*{0}[^.?!]*[.?!]'.format(tag), self.data)
+        try:
+            self.data = re.findall(r'\w[^.?!]*{0}[^.?!]*[.?!]'.format(tag), self.data)
+            if len(self.data) == 0:
+                self.data = None
+        except TypeError:
+            self.status = 400
 
     def getFlag(self):
         self.data = self.flag
@@ -85,27 +102,28 @@ class RequestParser:
 class RequestHandler(tornado.web.RequestHandler):
     def get(self):
         headers = {'content-type': 'application/json'}
-        data = dict(address=ADDRESS, port=PORT, type='text', content='country(Poland)getFlag')
-        r = requests.post('http://{0}:{1}'.format(ADDRESS, PORT), params=data, headers=headers)
+        data = dict(address=SERVER_ADDRESS, port=SERVER_PORT, type='text', content='country(Poland)getFlag')
+        r = requests.post('http://{0}:{1}'.format(SERVER_ADDRESS, SERVER_PORT), data=json.dumps(data), headers=headers)
         print r.status_code
 
-        self.write('ok')
+        self.write('{0}'.format(r.status_code))
 
     def post(self):
         def fix_content():
             request['content'] = re.sub(r'\)(?=[^;])', r');', request['content']) # adding delimeter
+            request['content'] = re.sub(r'\s', r'_', request['content']) # replacing spaces
 
-        request = {
-            'address': self.get_argument("address", default=ADDRESS, strip=True),
-            'port':    self.get_argument("port", default=PORT, strip=True),
-            'type':    self.get_argument("type", None, True),
-            'content': self.get_argument("content", None, True)
-        }
+        try:
+            request = json.loads(self.request.body)
+        except ValueError:
+            self.send_error(400)
+            return
+
         fix_content()
 
         conn = pymongo.MongoClient(DB_ADDRESS)
-        conn[DB].authenticate(DBU, DBP)
-        db = conn[DB]
+        db = conn[DB_NAME]
+        db.authenticate(DB_USER, DB_PASS)
 
         db_result_req = db.requests.find_one(request)
         if not db_result_req:
@@ -116,30 +134,37 @@ class RequestHandler(tornado.web.RequestHandler):
             db_result_data = db.data.find_one(data)
             if not db_result_data:
                 result = RequestParser(request)
+                if result.status == 404:
+                    self.send_error(404)
+                    return
+                elif result.status == 400:
+                    self.send_error(400)
+                    return
                 data['data'] = result.data
                 db_result_in = db.data.insert_one(data).inserted_id
                 request['data_id'] = db_result_in
                 print '[NEW DATA]'
-                print result.data
+                self.write(json.dumps(result.data, ensure_ascii=False).encode('utf-8'))
+                self.set_status(201)
             else:
                 request['data_id'] = db_result_data['_id']
                 print '[DATA DB]'
-                print db_result_data['data']
+                self.write(json.dumps(db_result_data['data'], ensure_ascii=False).encode('utf-8'))
 
             db.requests.insert_one(request)
         else:
             db_result_data = db.data.find_one({'_id': db_result_req['data_id']})
             print '[REQ DB]'
-            print db_result_data['data']
+            self.write(json.dumps(db_result_data['data'], ensure_ascii=False).encode('utf-8'))
 
 
 if __name__ == "__main__":
-    print '\n\n\n'
+    print '\n\n'
     application = tornado.web.Application([
         (r"/", RequestHandler)
     ])
 
     server = tornado.httpserver.HTTPServer(application)
-    server.bind(PORT)
+    server.bind(SERVER_PORT)
     server.start(0)  # Forks multiple sub-processes
     tornado.ioloop.IOLoop.current().start()
