@@ -1,7 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 from bs4 import BeautifulSoup
+from PIL import Image
+from StringIO import StringIO
+import cv2
 import json
+import numpy
 import pymongo
 import re
 import requests
@@ -23,10 +27,13 @@ SERVER_PORT    = '9901'
 
 
 class RequestParser:
-    def __init__(self, request):
+    N = 8 # 4/8/16/32
+
+    def __init__(self, request, db):
         self.data = None
         self.flag = None
         self.status = 200
+        self.db = db
         self.meth_list = []
         self.args_list = []
 
@@ -96,17 +103,45 @@ class RequestParser:
         self.data = self.flag
 
     def checkFlag(self, link):
-        self.data = link
+        result = requests.get(link, stream=True)
+        img = Image.open(StringIO(result.content))
+        img.save('img.png')
+        img = cv2.imread('img.png',0)
+
+        r, c = img.shape[:2]
+        dr, dc = r/RequestParser.N, c/RequestParser.N
+
+        sub_imgs = [img[y*dr:(y+1)*dr, x*dc:(x+1)*dc] for x in range(RequestParser.N) for y in range(RequestParser.N)]
+        sub_hists = map(lambda i: cv2.calcHist(i, [0, 1, 2], None, [8, 8, 8],[0, 256, 0, 256, 0, 256]), sub_imgs)
+        sub_hists = map(lambda x: cv2.normalize(x).flatten(), sub_hists)
+
+        sub_hists = numpy.array(sub_hists)
+
+        result = 0
+        country_name = []
+        self.status = 404
+
+        for r in self.db.flags.find():
+            sub_hists_db = list(numpy.float32(r['subhistograms{}'.format(RequestParser.N)]))
+            sub_result = [cv2.compareHist(h1, h2, cv2.cv.CV_COMP_CORREL) for h1,h2 in zip(sub_hists, sub_hists_db)]
+            sub_result = sum(sub_result)/len(sub_result)
+            if sub_result > result:
+                result = sub_result
+                country_name = [r['country']]
+                self.status = 200
+                if result >= 0.99:
+                    break
+            elif sub_result == result:
+                country_name.append(r['country'])
+        if len(country_name) == 0:
+            country_name = None
+
+        self.data = country_name
 
 
 class RequestHandler(tornado.web.RequestHandler):
     def get(self):
-        headers = {'content-type': 'application/json'}
-        data = dict(address=SERVER_ADDRESS, port=SERVER_PORT, type='text', content='country(Poland)getFlag')
-        r = requests.post('http://{0}:{1}'.format(SERVER_ADDRESS, SERVER_PORT), data=json.dumps(data), headers=headers)
-        print r.status_code
-
-        self.write('{0}'.format(r.status_code))
+        self.write('OK')
 
     def post(self):
         def fix_content():
@@ -133,7 +168,7 @@ class RequestHandler(tornado.web.RequestHandler):
             }
             db_result_data = db.data.find_one(data)
             if not db_result_data:
-                result = RequestParser(request)
+                result = RequestParser(request, db)
                 if result.status == 404:
                     self.send_error(404)
                     return
@@ -165,6 +200,10 @@ if __name__ == "__main__":
     ])
 
     server = tornado.httpserver.HTTPServer(application)
-    server.bind(SERVER_PORT)
+    server.stop()
+    server.bind(SERVER_PORT, address=SERVER_ADDRESS)
     server.start(0)  # Forks multiple sub-processes
-    tornado.ioloop.IOLoop.current().start()
+    try:
+        tornado.ioloop.IOLoop.current().start()
+    except KeyboardInterrupt:
+        tornado.ioloop.IOLoop.current().stop()
