@@ -1,5 +1,5 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+from jpwp.settings import *
 from bs4 import BeautifulSoup
 from PIL import Image
 from StringIO import StringIO
@@ -14,17 +14,6 @@ import tornado.httpserver
 import tornado.ioloop
 import tornado.options
 import tornado.web
-
-# GLOBALS
-WIKI_URL = 'http://en.wikipedia.org/wiki/'
-
-DB_ADDRESS = 'mongodb://mongo0.mydevil.net:27017'
-DB_NAME    = 'mo11939_jpwp'
-DB_USER    = 'mo11939_jpwp'
-DB_PASS    = 'TI3jpwp'
-
-SERVER_ADDRESS = 'localhost'
-SERVER_PORT    = '9901'
 
 
 class RequestParser:
@@ -86,7 +75,7 @@ class RequestParser:
         :return: page text, country flag
         """
 
-        page = requests.get(WIKI_URL+name)
+        page = requests.get(WIKI_TEXT_URL+name)
         if page.status_code == 404:
             self.status = 404
             return None, None
@@ -180,15 +169,13 @@ class RequestParser:
         for r in self.db.flags.find():
             sub_hists_db = list(numpy.float32(r['subhistograms{}'.format(RequestParser.N)]))
             sub_result = [cv2.compareHist(h1, h2, cv2.cv.CV_COMP_CORREL) for h1,h2 in zip(sub_hists, sub_hists_db)]
-            sub_result = sum(sub_result)/len(sub_result)
+            sub_result = min(sub_result) # sum(sub_result)/len(sub_result)
             if sub_result > result:
                 result = sub_result
                 country_name = r['country']
                 self.status = 200
                 if result >= 0.99:
                     break
-        if len(country_name) == 0:
-            country_name = None
 
         self.data = country_name
 
