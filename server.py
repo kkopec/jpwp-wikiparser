@@ -119,7 +119,7 @@ class RequestParser:
         :param tag: tag to find
         """
         try:
-            self.data = re.findall(r'\w[^.?!]*{0}[^.?!]*[.?!]'.format(tag), self.data)
+            self.data = re.findall(r'\w?[^.?!]*{0}[^.?!]*[.?!]'.format(tag), self.data)
             if len(self.data) == 0:
                 self.data = None
         except TypeError:
@@ -147,6 +147,10 @@ class RequestParser:
         """
         # downloading image
         result = requests.get(link, stream=True)
+        if result.status_code == 404:
+            self.status = 404
+            self.data = None
+            return
         img = Image.open(StringIO(result.content))
         img.save('img.png')
         img = cv2.imread('img.png',0)
