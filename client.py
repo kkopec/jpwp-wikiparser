@@ -7,6 +7,7 @@ import json
 import re
 import requests
 
+# Sample requests
 requests_list = [
     dict(address=SERVER_ADDRESS, port=SERVER_PORT, type='text', content='country(Poland)'),
     dict(address=SERVER_ADDRESS, port=SERVER_PORT, type='text', content='country(Poland)tag(Sea)'),
@@ -16,6 +17,10 @@ requests_list = [
 
 
 def get_random_request():
+    """
+    Creates random request.
+    """
+
     method_id = randint(0,len(METHODS)-1)
     method = METHODS[method_id]
     type = 'text'
@@ -52,4 +57,4 @@ if __name__ == "__main__":
     for req in requests_list:
         r = requests.post('http://{0}:{1}'.format(SERVER_ADDRESS, SERVER_PORT), data=json.dumps(req), headers=headers)
         print '\n',r.status_code,' - ',req['content']
-        print r.content[:100]
+        print r.content[:300] # screen flood prevention
