@@ -15,7 +15,7 @@ METHODS = [
 ]
 
 # Histograms matrix dimension
-MATRIX_N = [8] # histograms matrix dimension
+MATRIX_N = [8] # histograms matrixes dimensions
 
 # Countries list
 COUNTRIES = [
