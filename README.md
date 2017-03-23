@@ -1,7 +1,7 @@
-#jpwp-wikiparser
+# jpwp-wikiparser
 [AGH] JPWP (High-level Programming Languages) course project
 
-##Project description
+## Project description
 
 The goal of this project is to write a network application in Python. Created application has to download content of the web page. For simplicity, let's assume that it will be english wikipedia (http://en.wikipedia.org/). Request should contain name of the country, which information about should be downloaded.
 After that, information received in response should be stored in database - MongoDB. In case of multiple identical requests, data should be fetched from the database (not downloaded again). Requests should be sent using HTTP methods. Additionally an application should allow for country's search based on a given flag image (flag image should be downloaded from the internet).
